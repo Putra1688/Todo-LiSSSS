@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:sliding_up_panel/sliding_up_panel.dart';
 import '../models/task.dart';
 import '../services/task_services.dart';
+import '../services/notification_service.dart';
 import '../widgets/task_tile.dart';
 import 'dart:ui';
 
@@ -15,6 +16,7 @@ class TodoPage extends StatefulWidget {
 
 class _TodoPageState extends State<TodoPage> {
   final TaskService _taskService = TaskService();
+  final NotificationService _notificationService = NotificationService();
   final TextEditingController _controller = TextEditingController();
   final PanelController _panelController = PanelController();
 
@@ -28,7 +30,13 @@ class _TodoPageState extends State<TodoPage> {
   @override
   void initState() {
     super.initState();
+    _initNotifications();
     _loadAll();
+  }
+
+  Future<void> _initNotifications() async {
+    await _notificationService.init();
+    await _notificationService.requestPermissions();
   }
 
   Future<void> _loadAll() async {
@@ -52,6 +60,7 @@ class _TodoPageState extends State<TodoPage> {
     final t = Task(title: title.trim(), deadline: deadline, category: category);
     setState(() => _todoList.add(t));
     _saveTasks();
+    _notificationService.scheduleTaskNotifications(t);
     _controller.clear();
     // when adding a task and panel is down, open a bit so user sees update
     _panelController.open();
@@ -62,6 +71,11 @@ class _TodoPageState extends State<TodoPage> {
     if (idx != -1) {
       setState(() => _todoList[idx].done = value ?? false);
       _saveTasks();
+      if (_todoList[idx].done) {
+        _notificationService.cancelTaskNotifications(_todoList[idx]);
+      } else {
+        _notificationService.scheduleTaskNotifications(_todoList[idx]);
+      }
     }
   }
 
@@ -70,6 +84,7 @@ class _TodoPageState extends State<TodoPage> {
     if (idx != -1) {
       setState(() => _todoList.removeAt(idx));
       _saveTasks();
+      _notificationService.cancelTaskNotifications(task);
     }
   }
 
