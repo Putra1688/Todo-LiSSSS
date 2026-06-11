@@ -6,12 +6,14 @@ class TaskTile extends StatelessWidget {
   final Task task;
   final ValueChanged<bool?> onChanged;
   final VoidCallback onDelete;
+  final VoidCallback onTap;
 
   const TaskTile({
     super.key,
     required this.task,
     required this.onChanged,
     required this.onDelete,
+    required this.onTap,
   });
 
   @override
@@ -43,6 +45,7 @@ class TaskTile extends StatelessWidget {
         ],
       ),
       child: ListTile(
+        onTap: onTap,
         contentPadding: const EdgeInsets.all(12),
         leading: Checkbox(
           value: task.done,

@@ -1,11 +1,13 @@
 // lib/pages/todo_page.dart
 import 'package:flutter/material.dart';
 import 'package:sliding_up_panel/sliding_up_panel.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 import '../models/task.dart';
 import '../services/task_services.dart';
 import '../services/notification_service.dart';
 import '../widgets/task_tile.dart';
 import 'dart:ui';
+import 'package:flutter/foundation.dart';
 
 class TodoPage extends StatefulWidget {
   const TodoPage({super.key});
@@ -27,11 +29,49 @@ class _TodoPageState extends State<TodoPage> {
   static const int maxCustomCategories = 3;
   static const String noneCategoryLabel = 'Tanpa Kategori';
 
+  BannerAd? _bannerAd;
+  bool _isAdLoaded = false;
+
+  final String _adUnitId = kIsWeb 
+      ? '' 
+      : (defaultTargetPlatform == TargetPlatform.android
+          ? 'ca-app-pub-7882096835336060/4374062103'
+          : 'ca-app-pub-7882096835336060/4374062103');
+
   @override
   void initState() {
     super.initState();
     _initNotifications();
     _loadAll();
+    _loadAd();
+  }
+
+  void _loadAd() {
+    if (kIsWeb) return; // AdMob is not supported on web
+    
+    _bannerAd = BannerAd(
+      adUnitId: _adUnitId,
+      request: const AdRequest(),
+      size: AdSize.banner,
+      listener: BannerAdListener(
+        onAdLoaded: (ad) {
+          debugPrint('$ad loaded.');
+          setState(() {
+            _isAdLoaded = true;
+          });
+        },
+        onAdFailedToLoad: (ad, err) {
+          debugPrint('BannerAd failed to load: $err');
+          ad.dispose();
+        },
+      ),
+    )..load();
+  }
+
+  @override
+  void dispose() {
+    _bannerAd?.dispose();
+    super.dispose();
   }
 
   Future<void> _initNotifications() async {
@@ -64,6 +104,23 @@ class _TodoPageState extends State<TodoPage> {
     _controller.clear();
     // when adding a task and panel is down, open a bit so user sees update
     _panelController.open();
+  }
+
+  void _editTask(Task oldTask, String newTitle, DateTime? newDeadline, String? newCategory) {
+    if (newTitle.trim().isEmpty) return;
+    final idx = _todoList.indexOf(oldTask);
+    if (idx != -1) {
+      setState(() {
+        _todoList[idx].title = newTitle.trim();
+        _todoList[idx].deadline = newDeadline;
+        _todoList[idx].category = newCategory;
+      });
+      _saveTasks();
+      _notificationService.cancelTaskNotifications(oldTask);
+      if (!_todoList[idx].done) {
+        _notificationService.scheduleTaskNotifications(_todoList[idx]);
+      }
+    }
   }
 
   void _toggleTaskByTask(Task task, bool? value) {
@@ -195,17 +252,24 @@ class _TodoPageState extends State<TodoPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  // ADD TASK DIALOG (pakai _categories dynamic)
-  void _showAddTaskDialog() {
-    DateTime? selectedDeadline;
-    String? selectedCategory;
+  // ADD/EDIT TASK DIALOG
+  void _showTaskDialog({Task? taskToEdit}) {
+    if (taskToEdit != null) {
+      _controller.text = taskToEdit.title;
+    } else {
+      _controller.clear();
+    }
+    
+    DateTime? selectedDeadline = taskToEdit?.deadline;
+    String? selectedCategory = taskToEdit?.category ?? (taskToEdit != null ? null : _selectedCategory);
+
     showDialog(
       context: context,
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: const Text('Tambah Task'),
+              title: Text(taskToEdit == null ? 'Tambah Task' : 'Edit Task'),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -302,7 +366,7 @@ class _TodoPageState extends State<TodoPage> {
                           // reopen the Add Task dialog so user can pick new category
                           Future.delayed(
                             Duration.zero,
-                            () => _showAddTaskDialog(),
+                            () => _showTaskDialog(taskToEdit: taskToEdit),
                           );
                         },
                         icon: const Icon(Icons.add),
@@ -325,10 +389,15 @@ class _TodoPageState extends State<TodoPage> {
                     final cat = selectedCategory == noneCategoryLabel
                         ? null
                         : selectedCategory;
-                    _addTask(_controller.text, selectedDeadline, cat);
+                    
+                    if (taskToEdit == null) {
+                      _addTask(_controller.text, selectedDeadline, cat);
+                    } else {
+                      _editTask(taskToEdit, _controller.text, selectedDeadline, cat);
+                    }
                     Navigator.pop(context);
                   },
-                  child: const Text('Tambah'),
+                  child: Text(taskToEdit == null ? 'Tambah' : 'Simpan'),
                 ),
                 
               ],
@@ -507,16 +576,28 @@ class _TodoPageState extends State<TodoPage> {
         ),
         const SizedBox(height: 12),
         Expanded(
-          child: ListView.builder(
+          child: ReorderableListView.builder(
+            buildDefaultDragHandles: _selectedCategory == null, // Hanya bisa reorder saat melihat "Semua Task"
             padding: const EdgeInsets.only(bottom: 80),
             itemCount: filtered.length,
             itemBuilder: (context, index) {
               final task = filtered[index];
               return TaskTile(
+                key: ValueKey('${task.title}_${task.deadline}_${task.category}_$index'),
                 task: task,
                 onChanged: (v) => _toggleTaskByTask(task, v),
                 onDelete: () => _deleteTaskByTask(task),
+                onTap: () => _showTaskDialog(taskToEdit: task),
               );
+            },
+            onReorder: (oldIndex, newIndex) {
+              if (_selectedCategory != null) return; // Cegah reorder jika difilter
+              if (newIndex > oldIndex) newIndex -= 1;
+              setState(() {
+                final item = _todoList.removeAt(oldIndex);
+                _todoList.insert(newIndex, item);
+              });
+              _saveTasks();
             },
           ),
         ),
@@ -531,7 +612,10 @@ Widget build(BuildContext context) {
   final total = _todoList.length;
   final done = _todoList.where((t) => t.done).length;
 
-  return Stack(
+  return Column(
+    children: [
+      Expanded(
+        child: Stack(
     children: [
       // Gradient background
       Container(
@@ -575,7 +659,7 @@ Widget build(BuildContext context) {
         body: SlidingUpPanel(
           controller: _panelController,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          minHeight: 380,
+          minHeight: 0,
           maxHeight: MediaQuery.of(context).size.height * 0.9,
           
           panel: _buildPanel(),
@@ -663,13 +747,25 @@ Widget build(BuildContext context) {
           child: FloatingActionButton(
             backgroundColor: Colors.transparent,
             elevation: 0,
-            onPressed: _showAddTaskDialog,
+            onPressed: _showTaskDialog,
             child: const Icon(Icons.add, size: 32, color: Colors.white),
           ),
         ),
-      ),
-    ],
-  );
+      ), // Closes Scaffold
+    ], // Closes Stack children
+  ), // Closes Stack
+), // Closes Expanded
+if (_isAdLoaded && _bannerAd != null)
+  SafeArea(
+    child: Container(
+      alignment: Alignment.center,
+      width: _bannerAd!.size.width.toDouble(),
+      height: _bannerAd!.size.height.toDouble(),
+      child: AdWidget(ad: _bannerAd!),
+    ),
+  ),
+], // Closes Column children
+); // Closes Column
 }
 
 // --- ubah dashboard jadi lebih modern
@@ -788,6 +884,30 @@ Widget _buildDashboard() {
                 ),
               ),
           ],
+        ),
+        const SizedBox(height: 24),
+        // Tombol untuk membuka Task List
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: () {
+              _panelController.open();
+            },
+            icon: const Icon(Icons.list_alt, size: 24),
+            label: const Text(
+              "Lihat Task",
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.white,
+              foregroundColor: Colors.deepPurple,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              elevation: 4,
+            ),
+          ),
         ),
       ],
     ),
